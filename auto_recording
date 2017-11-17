@@ -1,0 +1,430 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""Auto-pilot SU recording for dorsal horn NS cell
+ with Keithley 3390 waveform generator; Xcell3 amplifier; NIDAQ"""
+
+
+import os
+import winsound
+import datetime
+import random
+import itertools
+import threading
+import numpy as np
+import time as time
+import nidaqmx as daq
+import pyvisa as visa
+
+
+__all__ = ['auto_surecording']
+
+
+def exp_recd_para():
+    # experiment record of time, recording condition
+    # stimulation parameter of motor threshold and modification
+
+    local_time = time.asctime(time.localtime(time.time()))
+
+    try:
+        exp_rcd_key = ['rat', 'neuron', 'depth', 'angle', 'electrode', 'local_time']
+        exp_rcd_val = input(
+            '\nRecording info, separated by space\n'
+            '<#rat, #neuron, depth, angle, #electrode>\n'
+        ).split()
+        exp_rcd_val.append(local_time)
+        loc_exp_rcd = dict(zip(exp_rcd_key, exp_rcd_val))
+
+        mt_key = ['scs_mt', 'sciatic_mt']
+        mt_val = input('scs_mt, sciatic_mt in V\n').split()
+        mt_val[0:2] = list(map(float, mt_val[0:2]))
+        loc_mt = dict(zip(mt_key, mt_val))
+
+        '''
+        scs_para_key = ['scs_mt', 'scs_mod', 'scs_ontime', 'scs_freq', 'waveform', ]
+        scs_para_val = input(
+            '\nSCS parameters\n' 
+            '<scs_mt(V), scs_mod(%), scs_ontime, scs_freq, waveform, >\n'
+        ).split()
+        scs_para_val[0:4] = list(map(float, scs_para_val[0:4]))
+        loc_scs_para = dict(zip(scs_para_key, scs_para_val))
+
+        sciatic_para_key = ['sciatic_mt', 'sciatic_mod', 'sciatic_freq', 'sciatic_pw', 'status']
+        sciatic_para_val = input(
+            '\nSciatic stimulation parameters\n'
+            '<sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, status(1/0)>\n'
+        ).split()
+        sciatic_para_val = map(float, sciatic_para_val)
+        loc_sciatic_para = dict(zip(sciatic_para_key, sciatic_para_val))
+        '''
+
+    except ValueError:
+        print('must input arg separated by space')
+
+    else:
+        print('\nexp_record\n'
+              '<{5}>\nrat[{0}]/neuron[{1}] at {2}\u00b5m/{3}\u00b0 with #{4} electrode\n'
+              .format(*loc_exp_rcd.values()))
+        print('scs_mt={0}, sciatic_mt={1}\n'.format(*loc_mt.values()))
+
+        '''
+        print('\nSCS_para\n'
+              'waveform: {4} at {3}Hz for {2}sec; MT:{0}V, mod:{1}%\n'
+              .format(*loc_scs_para.values()))
+        print('\nSciatic para\n'
+              'sciatic stim at {2}Hz with pw={3}\u00b5s, switch={4}; MT:{0}V, mod:{1} X\n'
+              .format(*loc_sciatic_para.values()))
+        '''
+
+    return loc_exp_rcd, loc_mt
+
+
+def beep(n):
+    # makes n beep sound in 1 second
+
+    beep_freq = 1500  # Hz
+    beep_dur = int(990/n)  # ms
+
+    for i in range(0, n):
+        winsound.Beep(beep_freq, beep_dur)
+
+    return
+
+
+def countdown(sec, beep_freq=3):
+    # display time countdown on screen in seconds
+
+    while sec > 0:
+        if sec == 1:
+            print('1 sec ', end='\r')
+            beep(beep_freq)
+            sec -= 1
+            print('0 sec ', end='\r')
+        else:
+            print(sec, ' sec ', end='\r')
+            time.sleep(1)
+            sec -= 1
+
+    return
+
+
+def resources():
+    # check available resource in current computer
+
+    daq_resource = []
+    sys = daq.system.System()  # assign sys as a System object to access property [devices]
+
+    for dev in sys.devices:
+        daq_resource.append(dev)
+
+    rm = visa.ResourceManager()
+
+    print(' DAQ resource\n', daq_resource, '\n', 'VISA resource\n', list(rm.list_resources()))
+
+    return
+
+
+"""I/O to .txt file of bppc test and single-unit recording
+"""
+
+
+def io_su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
+          sciatic_freq, sciatic_pw, status, sciatic_mt, sciatic_mod):
+
+    # make a directory on desktop under current user with name in today's date+_rcd_SWK
+    curr_dir_path = os.path.abspath('.')
+    add_dir_name = str(datetime.datetime.now().date())+'_Rcd_SWK'
+    new_dir_path = os.path.join(curr_dir_path, 'Desktop', add_dir_name)
+
+    if os.path.isdir(new_dir_path):
+        pass
+    else:
+        os.mkdir(new_dir_path)
+
+    file_name = '{0}_{1}'.format(*exp_rcd.values()) + '_SU.txt'
+    file_path = os.path.join(new_dir_path, file_name)
+    with open(file_path, 'a') as f:
+        f.write('\n<SCS_para #{0}>\n'
+                'Trial, waveform, scs_freq, scs_ontime, scs_mt, scs_mod\n'
+                '{0}/{1}/{2}/{3}/{4}/{5}\n'
+                .format(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod))
+        f.write('<Sciatic para #{0}>\n'
+                'Trial, sciatic_freq, sciatic_pw, status, sciatic_mt, sciatic_mod\n'
+                '{0}/{1}/{2}/{3}/{4}/{5}\n'
+                .format(num, sciatic_freq, sciatic_pw, status, sciatic_mt, sciatic_mod))
+
+    return
+
+
+def io_bppc(ns):
+
+    # make a directory on desktop under current user with name in today's date+_rcd_SWK
+    curr_dir_path = os.path.abspath('.')
+    add_dir_name = str(datetime.datetime.now().date()) + '_Rcd_SWK'
+    new_dir_path = os.path.join(curr_dir_path, 'Desktop', add_dir_name)
+
+    if os.path.isdir(new_dir_path):
+        pass
+    else:
+        os.mkdir(new_dir_path)
+
+    file_name = '{0}_{1}'.format(*exp_rcd.values()) + '_SU.txt'
+    file_path = os.path.join(new_dir_path, file_name)
+
+    # decide the proceeding actions depending on bppc test
+    ns_type = {1: 'is', 0: 'isn\'t'}
+    with open(file_path, 'a') as f:
+        f.write('\n<{5}> rat[{0}]/neuron[{1}\n'
+                'exp_record\n'
+                'SU recording at {2}\u00b5m/{3}\u00b0 with #{4} electrode\n'
+                .format(*exp_rcd.values()))
+        f.write('\nBPPC test: This {0} NS neuron\n'.format(ns_type[ns]))
+        f.write('SU_record file:\n{0}\n'.format(new_dir_path))
+
+    return
+
+
+"""Configure Keithley 3390 to be ready to output SCS current, 
+   triggered by TTL signal from NI-DAQ 6126 with logic high threshold > 2.5 V 
+"""
+
+
+def wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod):
+    # Keithley 3390 configuration to be triggered/gated by NI-DAQ 6216 BNC with logic signal
+
+    rm = visa.ResourceManager()  # assign NI backend as resource manager
+    keithley = rm.open_resource('usb0::0x05E6::0x3390::1425019::INSTR')  # open keithley
+    keithley.timeout = None
+    keithley.write('*rst; *cls')  # reset to factory default, clear status command
+
+    # define arbitrary waveform, burst/trigger, frequency/amplitude
+    if waveform == 'Sin_10K':
+        keithley.write('function sin')
+    else:
+        keithley.write('function user')
+        keithley.write('function:user {0}'.format(str(waveform)))
+
+    keithley.write('burst:state on')
+
+    """trigger mode"""
+    keithley.write('burst:mode triggered')
+    keithley.write('burst:ncycles {0}'.format(str(scs_freq * scs_ontime)))
+
+    """ gated mode
+    keithley.write('burst:mode gated')
+    keithley.write('burst:gate:polarity normal')
+    """
+
+    keithley.write('trigger:source external')
+    keithley.write('trigger:slope positive')
+
+    keithley.write('frequency {0}'.format(str(scs_freq)))
+    keithley.write('voltage:unit vpp')
+    keithley.write('voltage {0}'.format(str(scs_mt * scs_mod / 100)))
+
+    keithley.close()  # close the instrument handle session
+
+    return
+
+
+def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw):
+    # time unit = 1ms; SI from 100us/V => 1mA/V
+    """
+    def time_pad_gen(status, freq, pw, on_time=60):
+        time_pad_unit = [amp * status] * 300 + [0] * 700  # 1s template
+        time_pad = time_pad_unit * 60  # 60s time pad
+        return time_pad
+    """
+
+    switch = {1: 'on', 0: 'off'}
+
+    amp = status * sciatic_mt * sciatic_mod / 10  # 10(mA/V)=[1*1(100uA/V)*100(mod)]/10
+
+    with daq.Task() as task:
+        task.ao_channels.add_ao_func_gen_chan(
+            'Dev1/ao0', type=daq.constants.FuncGenType.SQUARE, freq=sciatic_freq, amplitude=amp)
+        # task.ao_channels.ao_output_type(14750)                          # function generation
+        task.ao_channels.ao_voltage_units(10348)                        # unit = volts
+        # task.ao_channels.ao_func_gen_amplitude(amp)                       # 50-100MT/0 volt
+        # task.ao_channels.ao_func_gen_freq(sciatic_freq)                         # 1Hz
+        # task.ao_channels.ao_func_gen_type(14753)                        # square
+        task.ao_channels.ao_func_gen_square_duty_cycle(
+            sciatic_pw * sciatic_freq / 10)  # cycle% = PW/period(1000ms/freq)*100%
+        task.ao_idle_output_behavior(12526)                             # generate 0V when idle
+        task.timing.cfg_samp_clk_timing(1000000.0, sample_mode=10123)     # sampling at 1us, continuous output
+        # task.ao_channels.ao_output_type(10322)                        # voltage mode
+        # task.write(time_pad_gen(status, freq, pw=300), auto_start=True, timeout = 1)
+
+        beep(5)
+        task.start()
+        print('Sciatic stimulation is {0} (amp = {1}mA) for 60sec\n'
+              .format(switch[status], amp))
+        countdown(60, 1)
+        task.stop()
+        task.close()
+
+    return
+
+
+def scs(waveform, scs_freq, scs_mod, scs_mt):
+
+    with daq.Task() as task:
+        task.do_channels.add_do_chan('Dev1/port1/line0')     # PFI 0 /P1.0
+        task.do_channels.chan_type(10153)                    # digit output
+        task.do_channels.do_logic_family(14619)              # TTL/5V CMOS
+        task.do_channels.do_output_drive_type(12573)         # active drive, low:0V, high:3.3/5V
+        task.do_channels.do_line_states_start_state(10192)   # high (2.7V Output in TTL)
+        task.do_channels.do_line_states_paused_state(10192)  # low  (0.5V Output in TTL)
+        task.do_channels.do_line_states_done_state(10214)    # low
+
+        beep(5)
+        print('\n{0} stimulation at {1}Hz, {2}% MT: {3}\n'
+              .format(waveform, scs_freq, scs_mod, scs_mt))
+        task.start()
+        countdown(20, 1)
+        task.stop()
+        task.close()
+
+    return
+
+
+def sample_trigger():
+
+    with daq.Task() as task:
+        task.do_channels.add_do_chan('Dev1/port1/line0')     # PFI 0 /P1.0
+        task.do_channels.chan_type(10153)                    # digit output
+        task.do_channels.do_logic_family(14619)              # TTL/5V CMOS
+        task.do_channels.do_output_drive_type(12573)         # active drive, low:0V, high:3.3/5V
+        task.do_channels.do_line_states_start_state(10192)   # high (2.7V Output in TTL)
+        task.do_channels.do_line_states_paused_state(10192)  # low  (0.5V Output in TTL)
+        task.do_channels.do_line_states_done_state(10214)    # low
+
+        print('\nsampling start...\n')
+        task.start()
+        task.stop()
+        task.close()
+
+    return
+
+
+def bppc():
+    # total 120sec
+
+    bppc_list = ['BRUSH', 'PRESS', 'PINCH', 'CRUSH']
+
+    for i in bppc_list:
+
+        print('wait 10sec, prepare for {0}'.format(i))
+        countdown(10, 3)
+        print('start {0} for 10 secs'.format(i))
+        countdown(10, 3)
+        print('rest 10 secs')
+        countdown(10, 3)
+
+    return
+
+
+def su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
+       status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw):
+
+    io_su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
+          status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw)
+
+    # check inputs/raise error before exec
+    # trigger sampling at t=0 for 60 sec
+    t = threading.Timer(0, sample_trigger)
+    t.start()
+    t.join()
+    # start episode at t=0
+    threading.Timer(0, wavegen, [waveform, scs_freq, scs_ontime, scs_mt, scs_mod]).start()
+    threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw]).start()
+    # start scs stim at t=20
+    threading.Timer(20, scs, [waveform, scs_freq, scs_mod, scs_mt]).start()
+    # 60 sec washout period
+    threading.Timer(60, print, ['washing period for 60 sec']).start()
+    threading.Timer(60, countdown, [60, 1]).start()
+    time.sleep(120)
+
+    return
+
+
+"""script for automated recording"""
+
+
+def auto_bppc():
+    input('set LabChart sampling at trigger mode with 60sec sampling length then press ENTER')
+
+    trigger_1 = threading.Timer(0, sample_trigger)
+    trigger_1.start()
+    trigger_1.join()
+    threading.Timer(0, bppc).start()
+    threading.Timer(60, sample_trigger).start()
+
+    time.sleep(120)
+
+    ns_type = input('\nNS cell? (1/0)')
+
+    if ns_type == '1':
+        io_bppc(ns=1)
+        print('\nThis is a NS neuron, SU recording will start later.\n'
+              'Save BPPC recording and initiate new recording in LabChart\n')
+        input('Press ENTER when ready to proceed to SCS episodes\n')
+        auto_su(**mt)
+    elif ns_type == '0':
+        io_bppc(ns=0)
+        print('Not a NS neuron, SU recording will not start.')
+
+    return
+
+
+def auto_su(scs_mt, sciatic_mt, sciatic_mod=50,
+            scs_ontime=20, sciatic_freq=1, sciatic_pw=300, **kw):
+    # timing clock: sciatic stim start at 0s, scs start at 20sec
+
+    para_change = input('any change to scs_ontime, sciatic_pw/freq/mod?\n'
+                        'default value: 20 secs,   300 \u00b5s/1 Hz/50x    (press ENTER if none)\n')
+
+    if para_change == '':
+        pass
+    else:
+        scs_ontime, sciatic_pw, sciatic_freq, sciatic_mod = map(int, para_change.split()[0:3])
+
+    waveform_sel = [('BP_50', 50), ('BP_1K', 1000), ('BP_10K', 10000), ('Sin_10K', 10000)]
+    scs_mod_sel = [90, 120]
+    status_sel = [0, 1]
+
+    para_comb = itertools.product(waveform_sel, scs_mod_sel, status_sel)
+    para_list = list(para_comb)
+    para_dict = dict(enumerate(para_list))
+
+    n = len(para_dict)
+    roster = list(range(n))
+
+    indices = tuple(random.sample(roster, n))
+
+    for i in indices:
+        print('waveform/freq={0} at {1}% MT with sciatic[{2}]'.format(*para_dict[i]))
+        waveform = para_dict[i][0][0]
+        scs_freq = int(para_dict[i][0][1])
+        scs_mod = int(para_dict[i][1])
+        status = int(para_dict[i][2])
+        num = i
+
+        su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
+           status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw)
+
+    return
+
+
+"""define variables/calling functions"""
+resources()
+exp_rcd, mt = exp_recd_para()
+auto_bppc()
+
+
+
+
+
+
+
+
