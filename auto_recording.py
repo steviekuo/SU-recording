@@ -412,6 +412,7 @@ def auto_char():
             print('Not typical NS/WDR neuron, SU recording will not start.')
 
         elif cell_type == 1 or 2:
+            input('disconnect PowerLab AI 4 from AO 1')
             auto_sr(cell_type, **mt)
 
         else:
