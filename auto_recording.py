@@ -104,7 +104,7 @@ def io_su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
           sciatic_freq, sciatic_pw, status, sciatic_mt, sciatic_mod):
 
     # make a directory on desktop under current user with name in today's date+_rcd_SWK
-    curr_dir_path = os.path.abspath('../..')
+    curr_dir_path = os.path.expanduser('~')
     add_dir_name = str(datetime.datetime.now().date())+'_Rcd_SWK'
     new_dir_path = os.path.join(curr_dir_path, 'Desktop', add_dir_name)
 
@@ -131,7 +131,7 @@ def io_su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
 def io_char(cell_type, c_thres=0):
 
     # make a directory on desktop under current user with name in today's date+_rcd_SWK
-    curr_dir_path = os.path.abspath('../..')
+    curr_dir_path = os.path.expanduser('~')
     add_dir_name = str(datetime.datetime.now().date()) + '_Rcd_SWK'
     new_dir_path = os.path.join(curr_dir_path, 'Desktop', add_dir_name)
 
@@ -201,29 +201,31 @@ def wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod):
     keithley.write('*rst; *cls')  # reset to factory default, clear status command
 
     # define arbitrary waveform, burst/trigger, frequency/amplitude
-    if waveform == 'Sin_10K':
-        keithley.write('function sin')
+    if waveform == 'DC':
+        keithley.write('function DC')
+        keithley.write('voltage:offset 0')
     else:
         keithley.write('function user')
         keithley.write('function:user {0}'.format(str(waveform)))
 
-    keithley.write('burst:state on')
+        keithley.write('burst:state on')
 
-    """trigger mode"""
-    keithley.write('burst:mode triggered')
-    keithley.write('burst:ncycles {0}'.format('infinity'))   # or str(scs_freq * scs_ontime)
+        """trigger mode"""
+        keithley.write('burst:mode triggered')
+        keithley.write('burst:ncycles {0}'.format('infinity'))   # or str(scs_freq * scs_ontime)
 
-    """ gated mode
-    keithley.write('burst:mode gated')
-    keithley.write('burst:gate:polarity normal')
-    """
+        """ gated mode
+        keithley.write('burst:mode gated')
+        keithley.write('burst:gate:polarity normal')
+        """
 
-    keithley.write('trigger:source external')
-    keithley.write('trigger:slope positive')
+        keithley.write('trigger:source external')
+        keithley.write('trigger:slope positive')
 
-    keithley.write('frequency {0}'.format(str(scs_freq)))
-    keithley.write('voltage:unit vpp')
-    keithley.write('voltage {0}'.format(str(scs_mt * scs_mod / 100)))
+        keithley.write('frequency {0}'.format(str(scs_freq)))
+        keithley.write('voltage:unit vpp')
+        keithley.write('voltage {0}'.format(str(scs_mt * scs_mod / 100)))  # scs_mod/100 = %
+        keithley.write('voltage:offset 0')
 
     keithley.close()  # close the instrument handle session
 
@@ -241,7 +243,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
 
     switch = {1: 'on', 0: 'off'}  # 0.5:25x, 1.5:75x, 2: 100x  3x c-threshold~30x
 
-    num_si = 2.0
+    num_si = 1.0  # currently using caputron
 
     amp = status * sciatic_mt * sciatic_mod / 10  # 10(mA/V)=[1*1(100uA/V)*100(mod)]/10
     if amp > 10:  # max amp = 10 for A-M2000 5Vpp*2, Caputron 10Vpp*1
@@ -250,44 +252,37 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
 
     step = 100  # us
     pad = (1/sciatic_freq) * (10 ** 6) / step  # length(1/freq) in 100us
-    sample_per_second = float((10 ** 6) / step)  # specify sample per second for NI
+    sample_per_sec = float((10 ** 6) / step)  # specify sample per second for NI
     scale_wave = np.zeros(int(pad))
     scale_pw = math.floor(sciatic_pw/step)  # covert pw from 300us to 3 points in pad
     scale_wave[:scale_pw] = output_comm
     scale_wave[scale_pw:2*scale_pw] = mp_bp * output_comm
+    scale_wave[-1] = 0.001  # non zero at the end
 
     with daq.Task() as task:
+        # CONTINUOUS output within sciatic_ontime with designated waveform pad
         task.ao_channels.add_ao_voltage_chan('Dev1/ao0', min_val=-10.0, max_val=10.0
                                              , units=cons.VoltageUnits.VOLTS)
-        task.timing.cfg_samp_clk_timing(sample_per_second, sample_mode=cons.AcquisitionType.FINITE
+        task.timing.cfg_samp_clk_timing(sample_per_sec, sample_mode=cons.AcquisitionType.CONTINUOUS
                                         , samps_per_chan=len(scale_wave))
-        task.out_stream.output_buf_size = len(scale_wave)+1
-        '''
-        print(task.channels.physical_channel)
-        print(daq.system.Device('Dev1').terminals)
+        task.out_stream.output_buf_size = len(scale_wave)  # buffer size:= sample size
 
-        task.triggers.start_trigger.trig_type = cons.TriggerType.DIGITAL_EDGE
-        task.triggers.start_trigger.cfg_dig_edge_start_trig('/Dev1/PFI0', trigger_edge=cons.Edge.RISING)
-        task.out_stream.relative_to = cons.WriteRelativeTo.FIRST_SAMPLE
-        task.out_stream.offset = 0
-
-        task.triggers.pause_trigger.trig_type = cons.TriggerType.DIGITAL_LEVEL
-        task.triggers.pause_trigger.dig_lvl_src = '/Dev1/PFI1'
-        task.triggers.pause_trigger.dig_lvl_when = cons.Level.HIGH
-        '''
-
-        num_sci_stim = round(sciatic_ontime * sciatic_freq)  # i=num of stim within sciatic_ontime
         print('Sciatic stimulation is {0} (amp = {1}mA) for {2}sec\n'
               .format(switch[status], amp, sciatic_ontime))
-        task.write(scale_wave)
+        num_sci_stim = round(sciatic_ontime * sciatic_freq)
+        task.write(scale_wave, auto_start=False)
 
         beep(3)
-
-        while num_sci_stim > 0:
+        for i in range(num_sci_stim):
             task.start()
-            task.wait_until_done(10)  # wait all analog output read/write
+            time.sleep(1/sciatic_freq)
             task.stop()
-            num_sci_stim -= 1
+
+        '''
+        task.start()
+        time.sleep(sciatic_ontime)
+        task.stop()
+        '''
 
         beep(1)
 
@@ -298,7 +293,7 @@ def scs(waveform, scs_freq, scs_mod, scs_mt, scs_ontime):
 
     rm = visa.ResourceManager()  # assign NI backend as resource manager
     keithley = rm.open_resource('usb0::0x05E6::0x3390::1425019::INSTR')  # open keithley
-    keithley.write('OUTput ON')
+    keithley.write('OUTput ON')  # output on at burst mode, wait for trigger
 
     with daq.Task() as task:
         task.do_channels.add_do_chan('Dev1/port1/line0')  # PFI 0 /P1.0
@@ -320,6 +315,7 @@ def su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
 
     io_su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
           status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw)
+    wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod)
 
     # check inputs/raise error before exec
     # trigger sampling at t=0 for 60 sec
@@ -327,8 +323,8 @@ def su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
     t.start()
     t.join()
     # start episode at t=0
-    threading.Timer(0, wavegen, [waveform, scs_freq, scs_ontime, scs_mt, scs_mod]).start()
     threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw]).start()
+    # threading.Timer(0, wavegen, [waveform, scs_freq, scs_ontime, scs_mt, scs_mod]).start()
     # start scs stim at t=15, for 30s
     threading.Timer(15, scs, [waveform, scs_freq, scs_mod, scs_mt,scs_ontime]).start()
     # 60 sec washout period
@@ -523,7 +519,7 @@ def auto_wp(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, **kw):
 
     para_comb = itertools.product(waveform_sel, scs_mod_sel)
     para_list = list(para_comb)
-    para_list.append((('BP_50', 50, bp50_mt), 0))  # add windup episode w/o scs
+    para_list.append((('DC', 0, 0), 0))  # add windup episode w/o scs
     para_dict = dict(enumerate(para_list))
 
     n = len(para_dict)
