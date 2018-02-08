@@ -273,18 +273,22 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
         task.write(scale_wave, auto_start=False)
 
         beep(3)
-        for i in range(num_sci_stim):
-            task.start()
-            time.sleep(1/sciatic_freq)
-            task.stop()
-
-        '''
         task.start()
         time.sleep(sciatic_ontime)
         task.stop()
-        '''
 
-        beep(1)
+    with daq.Task() as task:
+        # finite output 0 to rest
+        task.ao_channels.add_ao_voltage_chan('Dev1/ao0', min_val=-10.0, max_val=10.0
+                                             , units=cons.VoltageUnits.VOLTS)
+        task.timing.cfg_samp_clk_timing(sample_per_sec, sample_mode=cons.AcquisitionType.FINITE
+                                        , samps_per_chan=2)
+        task.out_stream.output_buf_size = 2
+        task.write([0, 0], auto_start=True)
+        task.wait_until_done(1)
+        task.stop()
+
+    beep(1)
 
     return
 
@@ -336,7 +340,7 @@ def su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
 
 
 def sr(sciatic_mt, status=1, sciatic_freq=0.33333, sciatic_pw=300, sciatic_ontime=10):
-    #  8 intensities * (10+10) s =160s
+    #  8 intensities * (10+10) s =160s+20s spare =180s
     sr_intensity = [5, 10, 15, 20, 30, 40, 50, 75]
 
     t = threading.Timer(0, sample_trigger)
@@ -375,6 +379,7 @@ def windup(waveform, scs_freq, scs_mt, scs_mod, sciatic_mt, c_thres,
     threading.Timer(0, scs, [waveform, scs_freq, scs_mod, scs_mt, scs_ontime]).start()
     threading.Timer(20, print, ['after_windup period will last 10 sec\n']).start()
     time.sleep(30)
+    print('after windup for 210s')
 
     return
 
@@ -422,7 +427,7 @@ def auto_sr(cell_type, sciatic_mt, **kw):
     cell = {1: 'NS', 2: 'WDR'}
     print('\nThis is a {0} neuron, S-R testing will start later.\n'
           'Save Char recording and START new SR recording in LabChart\n'
-          '(trigger from Channel 3 with 160sec sampling length)'.format(cell[cell_type]))
+          '(trigger from Channel 3 with 180sec sampling length)'.format(cell[cell_type]))
     choice = input('Press ENTER when ready to proceed to S-R testing or 0 to exit\n')
 
     if choice == "0":
@@ -471,7 +476,7 @@ def auto_su(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, sciatic_mod=50,
     else:
         scs_ontime, sciatic_pw, sciatic_freq, sciatic_mod = map(int, para_change.split()[0:3])
 
-    waveform_sel = [('BP_50', 50, bp50_mt), ('BP_10K', 10000, bp10k_mt)]
+    waveform_sel = [('BP50Hz_K', 50, bp50_mt), ('BP10KHz_K', 10000, bp10k_mt)]
     scs_mod_sel = [20, 40, 80]
     status_sel = [0, 1]  # 25-75x MT, avg c-fiber thres=0.6-0.9mA 3x C-fiber=3mA ~30xMT
 
@@ -503,7 +508,7 @@ def auto_su(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, sciatic_mod=50,
         input('finish SU recording, start new WINDUP recording in LabChart\n'
               '(trigger from Channel 3 with 30sec infinite sampling length)\n'
               'Press ENTER to start\n')
-        auto_wp(c_thres, **mt)
+        auto_wp(c_thres=c_thres, **mt)
 
     else:
         print('finish automation of SU recording without testing wind-up')
@@ -514,7 +519,7 @@ def auto_su(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, sciatic_mod=50,
 def auto_wp(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, **kw):
     print('WINDUP recording starting')
 
-    waveform_sel = [('BP_50', 50, bp50_mt), ('BP_10K', 10000, bp10k_mt)]
+    waveform_sel = [('BP50Hz_K', 50, bp50_mt), ('BP10KHz_K', 10000, bp10k_mt)]
     scs_mod_sel = [80]
 
     para_comb = itertools.product(waveform_sel, scs_mod_sel)
@@ -542,9 +547,9 @@ def auto_wp(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, **kw):
 resources()
 exp_rcd, mt = exp_recd_para()
 neuron = auto_char()
-c_thres = auto_sr(neuron, **mt)
-auto_su(c_thres=c_thres, **mt)
-auto_wp(c_thres=c_thres, **mt)
+c_threshold = auto_sr(neuron, **mt)
+auto_su(c_thres=c_threshold, **mt)
+auto_wp(c_thres=c_threshold, **mt)
 
 
 
