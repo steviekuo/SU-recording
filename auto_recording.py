@@ -34,8 +34,8 @@ def exp_recd_para():
         exp_rcd_val.append(local_time)
         loc_exp_rcd = dict(zip(exp_rcd_key, exp_rcd_val))
 
-        mt_key = ['bp50_mt', 'bp10k_mt', 'sciatic_mt']
-        mt_val = input('Mt for BP50, BP10K, sciatic in V\n').split()
+        mt_key = ['bp50_mt', 'bp1k_mt', 'bp10k_mt', 'sciatic_mt']
+        mt_val = input('Mt for BP50, BP1K, BP10K, sciatic in V\n').split()
         mt_val[:] = list(map(float, mt_val[:]))
         loc_mt = dict(zip(mt_key, mt_val))
 
@@ -46,7 +46,7 @@ def exp_recd_para():
         print('\nexp_record\n'
               '<{5}>\nrat[{0}]/neuron[{1}] at {2}\u00b5m/{3}\u00b0 with #{4} electrode\n'
               .format(*loc_exp_rcd.values()))
-        print('bp50_mt={0}, bp10k_mt={1}, sciatic_mt={2}\n'.format(*loc_mt.values()))
+        print('bp50_mt={0}, bp1k_mt={1}, bp10k_mt={2}, sciatic_mt={3}\n'.format(*loc_mt.values()))
 
     return loc_exp_rcd, loc_mt
 
@@ -177,17 +177,21 @@ def sample_trigger():
 
 
 def char():
-    # total 270=30*9sec
+    # total 250=12*20sec+10s at the end
 
-    char_list = ['4g', '6g', '10g', '15g', '26g', 'BRUSH', 'PRESS', 'PINCH', 'CRUSH']
+    char_list = ['4g', '6g', '10g', '15g', '26g', '60g', '100g', '180g', 'BRUSH', 'PRESS', 'PINCH', 'CRUSH']
+
+    print('characterization start')
 
     for i in char_list:
         print('wait 10sec, prepare for {0}'.format(i))
         countdown(10, 3)
         print('start {0} for 10 secs'.format(i))
-        countdown(10, 5)
-        print('rest 10 secs')
         countdown(10, 1)
+
+    time.sleep(10)
+
+    print('characterization is ending')
 
     return
 
@@ -208,8 +212,6 @@ def wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod):
         keithley.write('function user')
         keithley.write('function:user {0}'.format(str(waveform)))
 
-        keithley.write('burst:state on')
-
         """trigger mode"""
         keithley.write('burst:mode triggered')
         keithley.write('burst:ncycles {0}'.format('infinity'))   # or str(scs_freq * scs_ontime)
@@ -227,13 +229,15 @@ def wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod):
         keithley.write('voltage {0}'.format(str(scs_mt * scs_mod / 100)))  # scs_mod/100 = %
         keithley.write('voltage:offset 0')
 
+        keithley.write('burst:state on')
+
     keithley.close()  # close the instrument handle session
 
     return
 
 
 def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_ontime=60, mp_bp=-1):
-    # time unit = 1ms; SI from 100us/V => 1mA/V, bp=-1 mp=1
+    # time unit = 100us; SI from 100us/V => 1mA/V, bp=-1 mp=1
     """
     def time_pad_gen(status, freq, pw, on_time=60):
         time_pad_unit = [amp * status] * 300 + [0] * 700  # 1s template
@@ -243,12 +247,12 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
 
     switch = {1: 'on', 0: 'off'}  # 0.5:25x, 1.5:75x, 2: 100x  3x c-threshold~30x
 
-    num_si = 1.0  # currently using caputron
+    num_si = 1.0  # currently using Caputron
 
     amp = status * sciatic_mt * sciatic_mod / 10  # 10(mA/V)=[1*1(100uA/V)*100(mod)]/10
-    if amp > 10:  # max amp = 10 for A-M2000 5Vpp*2, Caputron 10Vpp*1
-        amp = 10
-    output_comm = round(amp/num_si, 2)
+    if amp > 9.96:  # max amp = 10 for A-M2000 5Vpp*2, Caputron 10Vpp*1
+        amp = 9.96
+    output_comm = round(amp / num_si, 2)  # Caputron:output=amp, A-M2200 output=amp/2
 
     step = 100  # us
     pad = (1/sciatic_freq) * (10 ** 6) / step  # length(1/freq) in 100us
@@ -257,7 +261,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
     scale_pw = math.floor(sciatic_pw/step)  # covert pw from 300us to 3 points in pad
     scale_wave[:scale_pw] = output_comm
     scale_wave[scale_pw:2*scale_pw] = mp_bp * output_comm
-    scale_wave[-1] = 0.001  # non zero at the end
+    scale_wave[-1] = 0.0001  # non zero at the end
 
     with daq.Task() as task:
         # CONTINUOUS output within sciatic_ontime with designated waveform pad
@@ -269,7 +273,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
 
         print('Sciatic stimulation is {0} (amp = {1}mA) for {2}sec\n'
               .format(switch[status], amp, sciatic_ontime))
-        num_sci_stim = round(sciatic_ontime * sciatic_freq)
+        # num_sci_stim = round(sciatic_ontime * sciatic_freq)
         task.write(scale_wave, auto_start=False)
 
         beep(3)
@@ -278,7 +282,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
         task.stop()
 
     with daq.Task() as task:
-        # finite output 0 to rest
+        # finite output 0 to compulsorily rest the output
         task.ao_channels.add_ao_voltage_chan('Dev1/ao0', min_val=-10.0, max_val=10.0
                                              , units=cons.VoltageUnits.VOLTS)
         task.timing.cfg_samp_clk_timing(sample_per_sec, sample_mode=cons.AcquisitionType.FINITE
@@ -298,18 +302,39 @@ def scs(waveform, scs_freq, scs_mod, scs_mt, scs_ontime):
     rm = visa.ResourceManager()  # assign NI backend as resource manager
     keithley = rm.open_resource('usb0::0x05E6::0x3390::1425019::INSTR')  # open keithley
     keithley.write('OUTput ON')  # output on at burst mode, wait for trigger
-
+    si = 3.0
+    scs_amp = scs_mt * si
     with daq.Task() as task:
         task.do_channels.add_do_chan('Dev1/port1/line0')  # PFI 0 /P1.0
 
-        beep(5)
-        print('\n{0} stimulation at {1}Hz, {2}% MT: {3}\n'
-              .format(waveform, scs_freq, scs_mod, scs_mt))
+        # beep(5)
+        print('\n{0} stimulation at {1}Hz, {2}% MT: {3}*{4}SI={5}\n'
+              .format(waveform, scs_freq, scs_mod, scs_mt, si, scs_amp))
         # task.start()
         task.write([True, False], auto_start=True)
         countdown(scs_ontime, 1)
         keithley.write('OUTput OFF')
         task.stop()
+
+    return
+
+
+def sr(sciatic_mt, status=1, sciatic_freq=0.5, sciatic_pw=300, sciatic_ontime=10):
+    #  11 intensities * (10+10) s =220s+20s spare =240s
+    sr_intensity = [0.2, 0.5, 1, 5, 10, 15, 20, 30, 40, 50, 75]
+
+    t = threading.Timer(0, sample_trigger)
+    t.start()
+    t.join()
+
+    for i in sr_intensity:
+        sciatic_mod = i
+        t = threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod,
+                                         sciatic_freq, sciatic_pw, sciatic_ontime])
+        t.start()
+        t.join()
+        print('rest 10s')
+        time.sleep(10)
 
     return
 
@@ -330,31 +355,11 @@ def su(num, waveform, scs_freq, scs_ontime, scs_mt, scs_mod,
     threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw]).start()
     # threading.Timer(0, wavegen, [waveform, scs_freq, scs_ontime, scs_mt, scs_mod]).start()
     # start scs stim at t=15, for 30s
-    threading.Timer(15, scs, [waveform, scs_freq, scs_mod, scs_mt,scs_ontime]).start()
+    threading.Timer(15, scs, [waveform, scs_freq, scs_mod, scs_mt, scs_ontime]).start()
     # 60 sec washout period
     threading.Timer(60, print, ['washing period for 60 sec']).start()
     threading.Timer(60, countdown, [60, 1]).start()
     time.sleep(120)
-
-    return
-
-
-def sr(sciatic_mt, status=1, sciatic_freq=0.33333, sciatic_pw=300, sciatic_ontime=10):
-    #  8 intensities * (10+10) s =160s+20s spare =180s
-    sr_intensity = [5, 10, 15, 20, 30, 40, 50, 75]
-
-    t = threading.Timer(0, sample_trigger)
-    t.start()
-    t.join()
-
-    for i in sr_intensity:
-        sciatic_mod = i
-        t = threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod,
-                                         sciatic_freq, sciatic_pw, sciatic_ontime])
-        t.start()
-        t.join()
-        print('rest 10s')
-        time.sleep(10)
 
     return
 
@@ -388,8 +393,8 @@ def windup(waveform, scs_freq, scs_mt, scs_mod, sciatic_mt, c_thres,
 
 
 def auto_char():
-    print('map RF by 26g VF filament then\n'
-          '(trigger from Channel 3 with 270 sec sampling length)\n')
+    print('map RF by 180g VF filament then\n'
+          '(trigger from Channel 3 with 250 sec sampling length)\n')
 
     choice = input('START Char in LabChart then press ENTER to continue or 0 to exit\n')
 
@@ -400,9 +405,9 @@ def auto_char():
         trigger_1 = threading.Timer(0, sample_trigger)
         trigger_1.start()
         trigger_1.join()
-        threading.Timer(0, char).start()  # characterization 270s for Von Fray
+        threading.Timer(0, char).start()  # characterization 210s for Von Fray
 
-        time.sleep(270)
+        time.sleep(250)
 
         # determine cell type based on characterization
         cell_type = input('\ntype of cell? (0-Neither/1-NS/2-WDR) ')
@@ -427,7 +432,7 @@ def auto_sr(cell_type, sciatic_mt, **kw):
     cell = {1: 'NS', 2: 'WDR'}
     print('\nThis is a {0} neuron, S-R testing will start later.\n'
           'Save Char recording and START new SR recording in LabChart\n'
-          '(trigger from Channel 3 with 180sec sampling length)'.format(cell[cell_type]))
+          '(trigger from Channel 3 with 240sec sampling length)'.format(cell[cell_type]))
     choice = input('Press ENTER when ready to proceed to S-R testing or 0 to exit\n')
 
     if choice == "0":
@@ -435,7 +440,7 @@ def auto_sr(cell_type, sciatic_mt, **kw):
     else:
         # SR automation by calling sr function to determine c_threshold
         status = 1
-        sciatic_freq = 0.3333333
+        sciatic_freq = 0.5
         sciatic_pw = 300
         sciatic_ontime = 10
 
@@ -443,7 +448,7 @@ def auto_sr(cell_type, sciatic_mt, **kw):
 
         # determine c_threhold based on SR result
         c_threshold = input('C-fiber threshold in sciatic MT mod(X)\n'
-                            '5, 10, 15, 20, 30, 40, 50, 75x \n')
+                            '0.2, 0.5, 1, 5, 10, 15, 20, 30, 40, 50, 75x \n')
         c_threshold = int(c_threshold)
         io_char(cell_type, c_thres=c_threshold)
 
@@ -458,7 +463,7 @@ def auto_sr(cell_type, sciatic_mt, **kw):
     return c_threshold
 
 
-def auto_su(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, sciatic_mod=50,
+def auto_su(bp50_mt, bp1k_mt, bp10k_mt, sciatic_mt, c_thres=30,
             scs_ontime=30, sciatic_freq=0.3333333, sciatic_pw=300, **kw):
     # timing clock: sciatic stim start at 0s, scs start at 20sec
     """
@@ -468,15 +473,18 @@ def auto_su(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, sciatic_mod=50,
            roaster[i][0 1 2 3] = waveform, scs_freq, scs_mod, status
     """
 
+    sciatic_mod = 2 * c_thres
+    if sciatic_mod < 50:
+        sciatic_mod = 50
     para_change = input('any change to scs_ontime, sciatic_pw/freq/mod?\n'
-                        'default value: 30 secs,   300 \u00b5s/0.3333333 Hz/50x (press ENTER if none)\n')
+                        'default value: 30 secs,   300 \u00b5s/0.33 Hz/2xC-thres (press ENTER if none)\n')
 
     if para_change == '':
         pass
     else:
         scs_ontime, sciatic_pw, sciatic_freq, sciatic_mod = map(int, para_change.split()[0:3])
 
-    waveform_sel = [('BP50Hz_K', 50, bp50_mt), ('BP10KHz_K', 10000, bp10k_mt)]
+    waveform_sel = [('BP50Hz_K', 50, bp50_mt), ('BP1KHz_K', 1000, bp1k_mt), ('BP10KHz_K', 10000, bp10k_mt)]
     scs_mod_sel = [20, 40, 80]
     status_sel = [0, 1]  # 25-75x MT, avg c-fiber thres=0.6-0.9mA 3x C-fiber=3mA ~30xMT
 
@@ -516,15 +524,16 @@ def auto_su(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, sciatic_mod=50,
     return
 
 
-def auto_wp(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, **kw):
+def auto_wp(bp50_mt, bp1k_mt, bp10k_mt, sciatic_mt, c_thres=30, **kw):
+    # 4 SCS conditions: DC, 50Hz, 1KHz, 10KHz at 80% mt; 4*4m=16m
     print('WINDUP recording starting')
 
-    waveform_sel = [('BP50Hz_K', 50, bp50_mt), ('BP10KHz_K', 10000, bp10k_mt)]
+    waveform_sel = [('BP50Hz_K', 50, bp50_mt), ('BP1KHz_K', 1000, bp1k_mt), ('BP10KHz_K', 10000, bp10k_mt)]
     scs_mod_sel = [80]
 
     para_comb = itertools.product(waveform_sel, scs_mod_sel)
     para_list = list(para_comb)
-    para_list.append((('DC', 0, 0), 0))  # add windup episode w/o scs
+    para_list.insert(0, (('DC', 0, 0), 0))  # add windup episode w/o scs
     para_dict = dict(enumerate(para_list))
 
     n = len(para_dict)
@@ -543,6 +552,32 @@ def auto_wp(bp50_mt, bp10k_mt, sciatic_mt, c_thres=20, **kw):
     return
 
 
+def long_scs(bp10k_mt, sciatic_mt, c_thres=30, **kw):
+    # 10KHz at 80% mt for 30min prolong stimulation
+
+    waveform = 'BP10KHz_K'
+    scs_freq, scs_mt, scs_mod, scs_ontime = 10000, bp10k_mt, 80, int(1800)
+
+    sciatic_mod = 2 * c_thres
+    status, sciatic_freq, sciatic_pw, sciatic_ontime, mp_bp = 1, 0.33333, 300, scs_ontime/30, -1
+
+    wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod)
+
+    choice = input('start PRL, connect input chan 3 to PhysioTemp probe')
+    temp_before = input('record current SC temp before prolong SCS')
+
+    t = threading.Timer(0, sample_trigger)
+    t.start()
+    t.join()
+    threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_ontime, mp_bp]).start()
+    threading.Timer(0, scs, [waveform, scs_freq, scs_mod, scs_mt, scs_ontime]).start()
+    threading.Timer(0.25 * scs_ontime, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_ontime, mp_bp]).start()
+    threading.Timer(0.5 * scs_ontime, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_ontime, mp_bp]).start()
+    threading.Timer(0.75 * scs_ontime, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_ontime, mp_bp]).start()
+
+    return
+
+
 """define variables/calling functions"""
 resources()
 exp_rcd, mt = exp_recd_para()
@@ -550,7 +585,7 @@ neuron = auto_char()
 c_threshold = auto_sr(neuron, **mt)
 auto_su(c_thres=c_threshold, **mt)
 auto_wp(c_thres=c_threshold, **mt)
-
+long_scs(c_thres=c_threshold, **mt)
 
 
 
