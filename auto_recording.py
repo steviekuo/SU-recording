@@ -255,7 +255,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
     output_comm = round(amp / num_si, 2)  # Caputron:output=amp, A-M2200 output=amp/2
 
     step = 100  # us
-    pad = (1/sciatic_freq) * (10 ** 6) / step  # length(1/freq) in 100us
+    pad = (1/sciatic_freq) * (10 ** 6) / step  # length(1/freq) in 100us step
     sample_per_sec = float((10 ** 6) / step)  # specify sample per second for NI
     scale_wave = np.zeros(int(pad))
     scale_pw = math.floor(sciatic_pw/step)  # covert pw from 300us to 3 points in pad
@@ -276,7 +276,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
         # num_sci_stim = round(sciatic_ontime * sciatic_freq)
         task.write(scale_wave, auto_start=False)
 
-        beep(3)
+        # beep(3)
         task.start()
         time.sleep(sciatic_ontime)
         task.stop()
@@ -292,7 +292,7 @@ def sciatic(status, sciatic_mt, sciatic_mod, sciatic_freq, sciatic_pw, sciatic_o
         task.wait_until_done(1)
         task.stop()
 
-    beep(1)
+    # beep(1)
 
     return
 
@@ -302,7 +302,7 @@ def scs(waveform, scs_freq, scs_mod, scs_mt, scs_ontime):
     rm = visa.ResourceManager()  # assign NI backend as resource manager
     keithley = rm.open_resource('usb0::0x05E6::0x3390::1425019::INSTR')  # open keithley
     keithley.write('OUTput ON')  # output on at burst mode, wait for trigger
-    si = 3.0
+    si = 2.0
     scs_amp = scs_mt * si
     with daq.Task() as task:
         task.do_channels.add_do_chan('Dev1/port1/line0')  # PFI 0 /P1.0
@@ -321,7 +321,7 @@ def scs(waveform, scs_freq, scs_mod, scs_mt, scs_ontime):
 
 def sr(sciatic_mt, status=1, sciatic_freq=0.5, sciatic_pw=300, sciatic_ontime=10):
     #  11 intensities * (10+10) s =220s+20s spare =240s
-    sr_intensity = [0.2, 0.5, 1, 5, 10, 15, 20, 30, 40, 50, 75]
+    sr_intensity = [0.5, 1, 5, 10, 15, 20, 30, 40, 50, 75]
 
     t = threading.Timer(0, sample_trigger)
     t.start()
@@ -374,11 +374,13 @@ def windup(waveform, scs_freq, scs_mt, scs_mod, sciatic_mt, c_thres,
     sciatic_ontime = pulse / sciatic_freq
     scs_ontime = pulse / sciatic_freq
 
+    wavegen(waveform, scs_freq, scs_ontime, scs_mt, scs_mod)
+
     t1 = threading.Timer(0, sample_trigger)
     t1.start()
     t1.join()
     # start episode at t=0
-    threading.Timer(0, wavegen, [waveform, scs_freq, scs_ontime, scs_mt, scs_mod]).start()
+    # threading.Timer(0, wavegen, [waveform, scs_freq, scs_ontime, scs_mt, scs_mod]).start()
     threading.Timer(0, sciatic, [status, sciatic_mt, sciatic_mod, sciatic_freq,
                                  sciatic_pw, sciatic_ontime, mp_bp]).start()
     threading.Timer(0, scs, [waveform, scs_freq, scs_mod, scs_mt, scs_ontime]).start()
