@@ -15,11 +15,13 @@ import struct
 import pandas as pd
 from openpyxl import load_workbook
 from scipy import signal, stats
+import sorting_with_python as swp
+from scipy.stats.mstats import mquantiles
 
-"""
-% matplotlib
-inline
-"""
+plt.ion()
+
+
+# % matplotlib inline
 
 def read_adibin(path):
     """read adibin with header structure
@@ -30,7 +32,7 @@ def read_adibin(path):
     name of channels
     <channel_info>
     'unit', 'scale', 'range_high', 'range_low'
-    <data_array> ch0:yime stamp; data in ch1-ch4
+    <data_array> ch0:time stamp; data in ch1-ch4
     {'ch0':array([time])...'ch4':array([data])}
     """
 
@@ -100,7 +102,7 @@ def get_ch_num(ch_title, title):
     return ch_num
 
 
-def atf(mk_chan=None, rcd=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, interval=None):
+def atf(mk_chan=None, rcd=None, file_info=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, interval=None):
     # atf_period in ms
     # bp50_thres in chn2 in V
     atf_loc = []
@@ -129,13 +131,13 @@ def atf(mk_chan=None, rcd=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, in
     return atf_avg, atf_loc
 
 
-def blank(mk_chan=None, rcd=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, interval=None):
+def blank(mk_chan=None, rcd=None, file_info=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, interval=None):
     # atf_period in ms
     # bp50_thres in chn2 in V
     if interval == None:
         interval = file_info['sec_tick']
     point = int(atf_period / interval)
-    (atf_avg, atf_loc) = atf(mk_chan, rcd, mk_thres, atf_period, atf_freq)
+    (atf_avg, atf_loc) = atf(mk_chan, rcd, file_info, mk_thres, atf_period, atf_freq)
 
     new_rcd = copy.copy(rcd)
     for i in range(len(atf_loc)):
@@ -147,43 +149,30 @@ def blank(mk_chan=None, rcd=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, 
     return new_rcd
 
 
-def auto_atf(mk_chan=None, rcd=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, interval=None):
+def auto_atf(mk_chan=None, rcd=None, file_info=None, mk_thres=0.03, atf_period=0.005, atf_freq=50, interval=None):
     if interval == None:
         interval = file_info['sec_tick']
     point = int(atf_period / interval)
-    (atf_avg, atf_loc) = atf(mk_chan, rcd, mk_thres, atf_period, atf_freq)
-    choice = input('need adjust mk_thres={0} or atf_period={1}?(Y/N/exit)'.format(mk_thres, atf_period))
+    (atf_avg, atf_loc) = atf(mk_chan, rcd, file_info, mk_thres, atf_period, atf_freq)
 
-    while choice == 'Y':
-        atf_avg, atf_loc = 0, 0
-        new_mk_thres = float(input('atf_thres'))
-        new_atf_period = float(input('atf_period(s)'))
-        (atf_avg, atf_loc) = atf(mk_chan, rcd, mk_thres=new_mk_thres, atf_period=new_atf_period)
-        print('out2', atf_loc)
-        choice = input('need adjust mk_thres={0} or atf_period={1}?(Y/N/exit)'.format(new_mk_thres, new_atf_period))
-
-    if choice == 'N':
-        new_rcd = copy.copy(rcd)
-        for i in range(len(atf_loc)):
-            min_square = [float('inf')]
-            offset = 0
-            for k in range(-5, 9):
-                square = [(m - n) ** 2 for m, n in zip(new_rcd[atf_loc[i] - k:atf_loc[i] - k + point], atf_avg)]
-                if sum(square) < min_square[0]:
-                    min_square[0] = sum(square)
-                    offset = k
-            ratio = max(new_rcd[atf_loc[i] - k:atf_loc[i] - k + point]) / max(atf_avg)
-            atf_avg_temp = [t * ratio for t in atf_avg]
-            new_rcd[atf_loc[i] - offset:atf_loc[i] - offset + point] = [m - n for m, n in
-                                                                        zip(new_rcd[atf_loc[i] - offset:atf_loc[
-                                                                                                            i] - offset + point],
-                                                                            atf_avg_temp)]
-        fig = display(rcd, xsize=15, ysize=3, ymin=-2, ymax=2, linewidth=0.1)
-        fig = display(new_rcd, xsize=15, ysize=3, ymin=-2, ymax=2, linewidth=0.1)
-        plt.show(fig)
-    else:
-        new_rcd = []
-        pass
+    new_rcd = copy.copy(rcd)
+    for i in range(len(atf_loc)):
+        min_square = [float('inf')]
+        offset = 0
+        for k in range(-5, 9):
+            square = [(m - n) ** 2 for m, n in zip(new_rcd[atf_loc[i] - k:atf_loc[i] - k + point], atf_avg)]
+            if sum(square) < min_square[0]:
+                min_square[0] = sum(square)
+                offset = k
+        ratio = max(new_rcd[atf_loc[i] - k:atf_loc[i] - k + point]) / max(atf_avg)
+        atf_avg_temp = [t * ratio for t in atf_avg]
+        new_rcd[atf_loc[i] - offset:atf_loc[i] - offset + point] = [m - n for m, n in
+                                                                    zip(new_rcd[atf_loc[i] - offset:atf_loc[
+                                                                                                        i] - offset + point],
+                                                                        atf_avg_temp)]
+    fig = display(rcd, xsize=15, ysize=3, ymin=-2, ymax=2, linewidth=0.1)
+    fig = display(new_rcd, xsize=15, ysize=3, ymin=-2, ymax=2, linewidth=0.1)
+    plt.show(fig)
 
     return atf_avg, atf_loc, new_rcd
 
@@ -196,9 +185,9 @@ def display(data, edge=0.05, xsize=12, ysize=5, xmin=None, xmax=None, xlb=r'$\mu
         xmax = len(data)
 
     if ymin is None:
-        ymin = min(data) * 1.5
+        ymin = np.min(data) * 1.2
     if ymax is None:
-        ymax = max(data) * 1.5
+        ymax = np.max(data) * 1.2
 
     plt.figure(figsize=(xsize, ysize))
     plt.xlabel(xlb)
@@ -310,7 +299,7 @@ def elliptic(wave):
     return
 
 
-def sc_temp(data_array):
+def sc_temp(data_array, title=None):
     """get data from ch3: 'Trigger/Temp'"""
     sc_temp = data_array[get_ch_num('Trigger/Temp', title=title)]
     avg_sc_temp = (np.mean(sc_temp, axis=0)) * 1000
@@ -343,7 +332,7 @@ def butter_bandstop_filter(data, lowcut, highcut, fs, order):
     return y, sos
 
 
-def PSTH(data, xsize=12, ysize=5, bin_width=500, xmax=None, ymax=None):
+def PSTH(data, xsize=12, ysize=5, bin_width=500, xmax=None, ymax=None, hd=None):
     xlb = r'bin (5ms)'
     ylb = r'Spikes'
     edge = 0.05
@@ -379,3 +368,129 @@ def avg_amp(rcd):
     ymin = -avg_amp
     ymax = avg_amp
     return ymin, ymax
+
+
+def cut_sgl_evt(evt_pos, rcd, before=50, after=50):
+    # dl = len(peak)
+    cl = before + after + 1  ## The length of the cut
+    # cs = cl*dl ## The 'size' of a cut
+    cut = np.zeros(cl)
+    idx = np.arange(-before, after + 1)
+    keep = idx + int(evt_pos)
+    # within = np.bitwise_and(0 <= keep, keep < dl)
+    # kw = keep[within]
+    cut = rcd[keep].copy()
+    return cut
+
+
+def visual_cut(spk_posit, rcd=None, before=50, after=50):
+    res = np.zeros((len(spk_posit), (before + after + 1)))
+    for i, p in enumerate(spk_posit):
+        res[i, :] = cut_sgl_evt(p, rcd, before, after)
+
+    for i in range(np.shape(res)[0]):
+        plt.plot(res[i], color="black", lw=0.1)
+
+    spk_median = np.median(res, axis=0)
+    plt.axhline(y=0, color='black')
+    plt.plot(spk_median, color="red", lw=1)
+
+    # plt.xticks([0,20,40,60,80,100],[0,0.2,0.4,0.6,0.8,1.0])
+    plt.xlabel("time (10 us)")
+
+    cut_len = after + before + 1
+    return res, spk_median, cut_len
+
+
+def mk_noise(positions, data, before=14, after=30, safety_factor=2, size=2000):
+    sl = before + after + 1  ## cut length
+    ns = data.shape[0]  ## number of recording sites
+    i1 = np.diff(positions)  ## inter-event intervals
+    minimal_length = round(sl * safety_factor)
+    ## Get next the number of noise sweeps that can be
+    ## cut between each detected event with a safety factor
+    nb_i = (i1 - minimal_length) // sl
+    ## Get the number of noise sweeps that are going to be cut
+    nb_possible = min(size, sum(nb_i[nb_i > 0]))
+    reser = np.zeros((nb_possible, sl))
+    ## Create next a list containing the indices of the inter event
+    ## intervals that are long enough
+    idx_l = [i for i in range(len(i1)) if nb_i[i] > 0]
+    ## Make next an index running over the inter event intervals
+    ## from which at least one noise cut can be made
+    interval_idx = 0
+    ## noise_positions = np.zeros(nb_possible,dtype=numpy.int)
+    n_idx = 0
+    while n_idx < nb_possible:
+        within_idx = 0  ## an index of the noise cut with a long enough
+        ## interval
+        i_pos = positions[idx_l[interval_idx]] + minimal_length
+        ## Variable defined next contains the number of noise cuts
+        ## that can be made from the "currently" considered long-enough
+        ## inter event interval
+        n_at_interval_idx = nb_i[idx_l[interval_idx]]
+        while within_idx < n_at_interval_idx and n_idx < nb_possible:
+            reser[n_idx, :] = cut_sgl_evt(int(i_pos), data, before, after)
+            ## noise_positions[n_idx] = i_pos
+            n_idx += 1
+            i_pos += sl
+            within_idx += 1
+        interval_idx += 1
+    ## return (res,noise_positions)
+    return reser
+
+
+def good_evts_fct(samp, thr=3):
+    samp_med = np.median(samp, axis=0)
+    samp_mad = mad(samp)
+    above = samp_med > 0
+    samp_r = samp.copy()
+    for i in range(samp.shape[0]): samp_r[i, above] = 0
+    samp_med[above] = 0
+    res = np.apply_along_axis(lambda x:
+                              np.all(abs((x - samp_med) / samp_mad) < thr),
+                              1, samp_r)
+    return res
+
+
+def plot_events(evts_matrix,
+                n_plot=None,
+                n_channels=4,
+                events_color='black',
+                events_lw=0.1,
+                show_median=True,
+                median_color='red',
+                median_lw=0.5,
+                show_mad=True,
+                mad_color='blue',
+                mad_lw=0.5):
+    if n_plot is None:
+        n_plot = evts_matrix.shape[0]
+
+    cut_length = evts_matrix.shape[1] // n_channels
+
+    for i in range(n_plot):
+        plt.plot(evts_matrix[i, :], color=events_color, lw=events_lw)
+    if show_median:
+        MEDIAN = np.apply_along_axis(np.median, 0, evts_matrix)
+        plt.plot(MEDIAN, color=median_color, lw=median_lw)
+
+    if show_mad:
+        MAD = np.apply_along_axis(mad, 0, evts_matrix)
+        plt.plot(MAD, color=mad_color, lw=mad_lw)
+    """
+    left_boundary = np.arange(cut_length,
+                              evts_matrix.shape[1],
+                              cut_length*2)
+    for l in left_boundary:
+        plt.axvspan(l,l+cut_length-1,
+                    facecolor='grey',alpha=0.5,edgecolor='none')
+    """
+    plt.xticks([])
+    return
+
+
+def mad(x):
+    """Returns the Median Absolute Deviation of its argument.
+    """
+    return np.median(np.absolute(x - np.median(x))) * 1.4826
